@@ -1,0 +1,152 @@
+import sqlite3
+import csv
+import requests
+import time
+import os
+import shutil
+
+# === Prompt for CSV file path ===
+csv_path = input("📁 Enter the full path to your CSV file: ").strip()
+
+if not os.path.exists(csv_path):
+    print(f"❌ File not found: {csv_path}")
+    exit()
+
+# === Connect to SQLite database ===
+conn = sqlite3.connect("mtg_cards.db")
+cursor = conn.cursor()
+
+# === Ensure required tables exist ===
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS Sets (
+    set_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    set_name TEXT,
+    code TEXT UNIQUE,
+    release_date TEXT
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS Cards (
+    card_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_name TEXT,
+    mana_cost TEXT,
+    cmc REAL,
+    power TEXT,
+    toughness TEXT,
+    loyalty TEXT,
+    rarity TEXT,
+    set_id INTEGER,
+    type_line TEXT,
+    oracle_text TEXT,
+    flavor_text TEXT,
+    artist TEXT,
+    image_url TEXT,
+    FOREIGN KEY (set_id) REFERENCES Sets(set_id),
+    UNIQUE(card_name, set_id)
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS Collection (
+    card_id INTEGER PRIMARY KEY,
+    quantity INTEGER,
+    FOREIGN KEY (card_id) REFERENCES Cards(card_id)
+)
+""")
+
+# === Process each row in the CSV ===
+with open(csv_path, newline='', encoding='utf-8') as csvfile:
+    reader = csv.DictReader(csvfile)
+    for row in reader:
+        name = row['name']
+        set_code = row['set_code'].strip("()").lower()
+        collector_number = row['collector_number']
+        quantity = int(row['quantity'])
+
+        # === Query Scryfall API ===
+        api_url = f"https://api.scryfall.com/cards/{set_code}/{collector_number}"
+        print(f"🌐 Fetching: {api_url}")
+        response = requests.get(api_url)
+
+        if response.status_code != 200:
+            print(f"❌ Could not find: {name} ({set_code.upper()} #{collector_number})")
+            continue
+
+        card = response.json()
+
+        # === Extract card fields ===
+        card_name = card.get('name')
+        mana_cost = card.get('mana_cost')
+        cmc = card.get('cmc')
+        power = card.get('power')
+        toughness = card.get('toughness')
+        loyalty = card.get('loyalty')
+        rarity = card.get('rarity').capitalize() if card.get('rarity') else None
+        type_line = card.get('type_line')
+        oracle_text = card.get('oracle_text')
+        flavor_text = card.get('flavor_text')
+        artist = card.get('artist')
+        image_url = card.get('image_uris', {}).get('normal') if card.get('image_uris') else None
+
+        # === Set info ===
+        set_name = card['set_name']
+        release_date = card.get('released_at')
+
+        # === Insert or get set_id ===
+        cursor.execute("SELECT set_id FROM Sets WHERE code = ?", (set_code,))
+        set_row = cursor.fetchone()
+        if set_row:
+            set_id = set_row[0]
+        else:
+            cursor.execute(
+                "INSERT INTO Sets (set_name, code, release_date) VALUES (?, ?, ?)",
+                (set_name, set_code, release_date)
+            )
+            set_id = cursor.lastrowid
+
+        # === Insert card if not exists ===
+        cursor.execute("""
+            INSERT OR IGNORE INTO Cards (
+                card_name, mana_cost, cmc, power, toughness, loyalty,
+                rarity, set_id, type_line, oracle_text, flavor_text,
+                artist, image_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            card_name, mana_cost, cmc, power, toughness, loyalty,
+            rarity, set_id, type_line, oracle_text, flavor_text,
+            artist, image_url
+        ))
+
+        # === Get card_id ===
+        cursor.execute("SELECT card_id FROM Cards WHERE card_name = ? AND set_id = ?", (card_name, set_id))
+        card_id = cursor.fetchone()[0]
+
+        # === Insert or update quantity in Collection ===
+        cursor.execute("SELECT quantity FROM Collection WHERE card_id = ?", (card_id,))
+        result = cursor.fetchone()
+        if result:
+            new_quantity = result[0] + quantity
+            cursor.execute("UPDATE Collection SET quantity = ? WHERE card_id = ?", (new_quantity, card_id))
+        else:
+            cursor.execute("INSERT INTO Collection (card_id, quantity) VALUES (?, ?)", (card_id, quantity))
+
+        print(f"✅ Imported {quantity}x {card_name} from {set_code.upper()} #{collector_number}")
+        time.sleep(0.1)  # Small delay to avoid rate limits
+
+# === Commit changes and close DB ===
+conn.commit()
+conn.close()
+
+# === Move the CSV file to 'imported/' folder ===
+imported_folder = os.path.join(os.path.dirname(csv_path), "imported")
+os.makedirs(imported_folder, exist_ok=True)
+new_csv_path = os.path.join(imported_folder, os.path.basename(csv_path))
+
+try:
+    shutil.move(csv_path, new_csv_path)
+    print(f"📂 Moved CSV to: {new_csv_path}")
+except Exception as e:
+    print(f"⚠️ Could not move CSV file: {e}")
+
+print("🎉 Import complete!")
