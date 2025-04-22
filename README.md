@@ -1,7 +1,7 @@
 # MTG_Collection_Manager
 building out an inventory database with gui for Magic the gathering
 
-
+# as of april 21 2025 Gui_beta is my best version, test.py has no features aside displaying card information and price, bui_beta allows adding cards ont at a time and updating quantity. in time i will set up price charting and change logs, my goal is to build out a database and gui for a store inventory. 
 
 Overview
 The MTG Collection Manager is a Python-based application that allows you to manage, track, and analyze your Magic: The Gathering (MTG) card collection. The application features a GUI built with Tkinter, enabling users to add cards, update quantities, view card details, and track prices over time. The data is stored in an SQLite database, with integration to external APIs for fetching card information and prices.
